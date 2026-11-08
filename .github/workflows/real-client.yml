@@ -1,0 +1,97 @@
+name: Real MapleStory client and asset validation
+on:
+  workflow_dispatch:
+  push:
+    paths: ['.github/workflows/real-client.yml']
+permissions:
+  contents: read
+jobs:
+  client:
+    name: Compile real upstream MapleStory client
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: nmnsnv/maplestory-wasm
+          ref: 9eef4c730ff5639089eeccae51bf6266c878c30c
+      - name: Build actual C++ client through upstream Docker workflow
+        run: bash scripts/docker_build_wasm.sh --jobs 4
+      - name: Verify WebAssembly binary
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib,json
+          p=Path('build/JourneyClient.wasm')
+          assert p.read_bytes()[:8] == bytes([0,97,115,109,1,0,0,0])
+          assert Path('build/JourneyClient.js').stat().st_size > 1000
+          report={'upstream':'nmnsnv/maplestory-wasm','commit':'9eef4c730ff5639089eeccae51bf6266c878c30c','wasm_bytes':p.stat().st_size,'sha256':hashlib.sha256(p.read_bytes()).hexdigest(),'ios_tested':False,'assets_included':False}
+          Path('build/verification.json').write_text(json.dumps(report,indent=2))
+          print(report)
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: real-maplestory-wasm-client
+          path: |
+            build/JourneyClient.js
+            build/JourneyClient.wasm
+            build/verification.json
+            LICENSE
+          if-no-files-found: error
+  ui-assets:
+    name: Download and inspect original UI resource candidate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Install public download helper
+        run: python3 -m pip install gdown
+      - name: Download NX resource archive linked by OpenStory
+        run: |
+          mkdir -p reports
+          timeout 600 python3 -m gdown 'https://drive.google.com/uc?id=1LKhOtdDWOFJs8eIvqSx8pvP1ZfHF2rpo' -O nx-archive
+      - name: Extract UI data without executing Windows programs
+        run: |
+          7z l nx-archive > reports/archive-list.txt
+          7z e nx-archive -oui-probe -r UI.nx
+          python3 - <<'PY'
+          import pathlib,struct,json,hashlib
+          p=pathlib.Path('ui-probe/UI.nx')
+          assert p.exists(), 'No UI.nx found in archive'
+          with p.open('rb') as f:
+              h=f.read(52)
+              assert h[:4]==b'PKG4', 'Not a real NX file'
+              nc,no=struct.unpack_from('<IQ',h,4)
+              sc,so=struct.unpack_from('<IQ',h,16)
+              def read(offset,count):
+                  assert 0 <= offset <= p.stat().st_size-count
+                  f.seek(offset)
+                  b=f.read(count)
+                  assert len(b)==count
+                  return b
+              def string(i):
+                  assert i < sc
+                  pos=struct.unpack('<Q',read(so+8*i,8))[0]
+                  n=struct.unpack('<H',read(pos,2))[0]
+                  return read(pos+2,n).decode('utf-8')
+              def node(i):
+                  assert i < nc
+                  return struct.unpack('<IIHHQ',read(no+20*i,20))
+              current=0
+              path='Login.img/WorldSelect/BtChannel/layer:bg'
+              for part in path.split('/'):
+                  _,first,count,_,_=node(current)
+                  found=[i for i in range(first,first+count) if string(node(i)[0])==part]
+                  assert found, 'Missing required UI path segment: '+part
+                  current=found[0]
+              assert node(current)[3]==5, 'Expected bitmap at required UI node'
+          report={'source':'OpenStory README NX archive','ui_bytes':p.stat().st_size,'required_post_chaos_path':path,'path_verified':True,'ios_rendering_verified':False}
+          pathlib.Path('reports/ui-validation.json').write_text(json.dumps(report,indent=2))
+          print(report)
+          PY
+      - name: Retain diagnostic report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: original-resource-validation-report
+          path: reports/
+          if-no-files-found: ignore
