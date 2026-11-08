@@ -1,0 +1,50 @@
+name: Validate original-art offline MapleStory locally
+on:
+  workflow_dispatch:
+  push:
+    paths: ['.github/workflows/offline-original.yml']
+permissions:
+  contents: read
+jobs:
+  offline:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    env:
+      MAPLE_SERVER_REFERENCE: ${{ github.workspace }}/cosmic
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: tensorfish/openms
+          ref: 3e379cfb05beb29ae8413352c8a3345783eb35da
+          path: openms
+      - uses: actions/checkout@v4
+        with:
+          repository: P0nk/Cosmic
+          ref: fec53bc7714dc0f1ae3f50b2986cdf2727e0912a
+          path: cosmic
+      - uses: oven-sh/setup-bun@v2
+      - name: Install dependencies and check asset decoding and input
+        working-directory: openms
+        run: |
+          bun install --frozen-lockfile
+          bun test client/test/assets.test.js client/test/player-input.test.js
+      - name: Download original data to ephemeral runner only
+        run: |
+          curl --fail --location --retry 1 --connect-timeout 20 --max-time 600 -o original-assets.zip http://bucket.openms.dev/Maplestory-Assets.zip
+          unzip -q original-assets.zip -d gamefiles -x '__MACOSX/*'
+      - name: Check actual map, character, UI and audio extraction
+        working-directory: openms
+        run: bun run extract --assets ../gamefiles/Maplestory-Client --maps 100000000,100000001,100000002
+      - name: Compile offline client without publishing game assets
+        working-directory: openms
+        run: |
+          bun -e 'import {buildBrowser} from "./client/tools/browser-build.js"; import {prepareRelease} from "./client/tools/release-manifest.js"; await buildBrowser(console.log); const r=await prepareRelease(process.cwd()+"/client",console.log,{}); await Bun.write("../offline-build-report.json",JSON.stringify({source:"3e379cfb05beb29ae8413352c8a3345783eb35da",releaseId:r.releaseId,maps:r.maps,totalBytes:r.totalBytes,resourceCount:r.resources.length,assetsPublished:false,iosTested:false},null,2));'
+      - name: Retain metadata and diagnostics only
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: offline-validation-metadata-only
+          path: |
+            offline-build-report.json
+            openms/client/.cache/extraction/**/preflight.json
+          if-no-files-found: ignore
