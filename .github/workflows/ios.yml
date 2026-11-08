@@ -1,0 +1,61 @@
+name: Build iPhone IPA
+on:
+  push:
+    branches: [main]
+    paths-ignore: ['README.md', 'docs/**']
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: ios-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: MaplePocket-iOS
+    steps:
+      - uses: actions/checkout@v4
+      - name: Unpack offline iOS source
+        working-directory: .
+        run: unzip -q MaplePocket-iOS-source.zip
+      - name: Generate Xcode project
+        run: |
+          set -euo pipefail
+          xcodebuild -version
+          brew list xcodegen >/dev/null 2>&1 || brew install xcodegen
+          xcodegen generate
+      - name: Test gameplay and saves on iPhone simulator
+        run: |
+          set -euo pipefail
+          DEVICE_ID=$(xcrun simctl list devices available --json | python3 -c 'import json,sys; d=json.load(sys.stdin); print(next(x["udid"] for k,v in d["devices"].items() if "iOS" in k for x in v if "iPhone" in x["name"]))')
+          xcodebuild test -project MaplePocket.xcodeproj -scheme MaplePocket -destination "platform=iOS Simulator,id=$DEVICE_ID" -resultBundlePath TestResults.xcresult CODE_SIGNING_ALLOWED=NO
+      - name: Compile unsigned iPhone application
+        run: |
+          set -euo pipefail
+          xcodebuild build -project MaplePocket.xcodeproj -scheme MaplePocket -configuration Release -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath build CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY='' CURRENT_PROJECT_VERSION=${{ github.run_number }}
+      - name: Package and verify IPA
+        run: bash scripts/package-ipa.sh
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: MaplePocket-unsigned-IPA
+          path: |
+            MaplePocket-iOS/dist/MaplePocket-unsigned.ipa
+            MaplePocket-iOS/dist/SHA256SUMS.txt
+          if-no-files-found: error
+      - name: Publish downloadable build
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release create "build-${{ github.run_number }}-${{ github.run_attempt }}" dist/MaplePocket-unsigned.ipa dist/SHA256SUMS.txt --target "${{ github.sha }}" --title "枫叶单机 0.1 · Build ${{ github.run_number }}" --prerelease --notes 'iPhone/iPad 横屏单机试玩。临时美术，尚未实现完整 v079 或服务器联机。IPA 未签名，需自行签名安装。卸载会删除存档。'
+      - name: Upload test results on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: iOS-TestResults
+          path: MaplePocket-iOS/TestResults.xcresult
+          if-no-files-found: ignore
