@@ -54,9 +54,7 @@ jobs:
           cp -R client/dist ../MapleOriginal-iOS/WebContent/dist
           cp -R client/public/. ../MapleOriginal-iOS/WebContent/
           curl --fail --location -o ../MapleOriginal-iOS/WebContent/OPENMS-LICENSE.txt https://raw.githubusercontent.com/tensorfish/openms/main/LICENSE
-          printf 'OpenMS offline source: https://github.com/tensorfish/openms/tree/3e379cfb05beb29ae8413352c8a3345783eb35da
-GPL-3.0-or-later. iOS host source is included in the use3099/-ms079-ios repository. Original game assets retain their respective ownership.
-' > ../MapleOriginal-iOS/WebContent/SOURCE-NOTICE.txt
+          printf '%s' 'OpenMS source: https://github.com/tensorfish/openms/tree/3e379cfb05beb29ae8413352c8a3345783eb35da ; GPL-3.0-or-later. iOS host source: use3099/-ms079-ios. Original game assets retain their respective ownership.' > ../MapleOriginal-iOS/WebContent/SOURCE-NOTICE.txt
           du -sh ../MapleOriginal-iOS/WebContent
       - name: Generate Xcode project and compile simulator app
         working-directory: MapleOriginal-iOS
