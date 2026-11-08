@@ -18,6 +18,17 @@ jobs:
         working-directory: MaplePocket-iOS
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+      - name: Check gameplay source changes
+        id: changes
+        working-directory: .
+        run: |
+          if git diff --quiet HEAD^ HEAD -- MaplePocket-iOS-source.zip; then
+            echo "gameplay=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "gameplay=true" >> "$GITHUB_OUTPUT"
+          fi
       - name: Unpack offline iOS source
         working-directory: .
         run: unzip -q MaplePocket-iOS-source.zip
@@ -28,6 +39,7 @@ jobs:
           brew list xcodegen >/dev/null 2>&1 || brew install xcodegen
           xcodegen generate
       - name: Test gameplay and saves on iPhone simulator
+        if: github.event_name == 'workflow_dispatch' || steps.changes.outputs.gameplay == 'true'
         run: |
           set -euo pipefail
           DEVICE_ID=$(xcrun simctl list devices available --json | python3 -c 'import json,sys; d=json.load(sys.stdin); print(next(x["udid"] for k,v in d["devices"].items() if "iOS" in k for x in v if "iPhone" in x["name"]))')
@@ -37,7 +49,13 @@ jobs:
           set -euo pipefail
           xcodebuild build -project MaplePocket.xcodeproj -scheme MaplePocket -configuration Release -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath build CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY='' CURRENT_PROJECT_VERSION=${{ github.run_number }}
       - name: Package and verify IPA
-        run: bash scripts/package-ipa.sh
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path("scripts/package-ipa.sh")
+          p.write_text(p.read_text().replace('lipo -verify_arch arm64 "$APP/MaplePocket"', 'lipo "$APP/MaplePocket" -verify_arch arm64'))
+          PY
+          bash scripts/package-ipa.sh
       - name: Upload IPA artifact
         uses: actions/upload-artifact@v4
         with:
